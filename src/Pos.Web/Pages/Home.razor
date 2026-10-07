@@ -1,0 +1,456 @@
+@page "/"
+@implements IDisposable
+@inject TillState Till
+
+<PageTitle>Till: an offline-first point of sale</PageTitle>
+
+@if (!Till.Ready)
+{
+    <div class="boot" role="status"><div class="boot-mark" aria-hidden="true"><i></i><i></i><i></i></div><p class="boot-title">Till</p></div>
+}
+else
+{
+    var reg = Till.Register;
+    var pending = reg.Queue.Pending.Count;
+    var totals = Till.Cart.Calculate(reg.Tax);
+    var tip = Money.Round(totals.TotalCents * _tipPct / 100m);
+
+    <header class="top">
+        <div class="brand"><span class="mark" aria-hidden="true"><i></i><i></i><i></i></span><h1>Till</h1><span class="sub">offline-first point of sale</span></div>
+        <div class="status">
+            <span class="pill">@(reg.CurrentShift is null ? "Shift closed" : $"{reg.CurrentShift.Cashier} · shift open")</span>
+            <button class="conn @(Till.Online ? "on" : "off")" role="switch" aria-checked="@(Till.Online ? "true" : "false")" @onclick="() => Till.SetOnlineAsync(!Till.Online)">
+                <i></i>@(Till.Online ? "Online" : "Offline")
+            </button>
+            <button class="pill sync @(pending > 0 ? "warn" : "")" @onclick="() => Till.SyncAsync(manual: true)" title="Send waiting sales to the back office">
+                @(pending == 0 ? "All synced" : $"{pending} waiting to sync")
+            </button>
+        </div>
+    </header>
+
+    <nav class="tabs" aria-label="Sections">
+        @foreach (var (id, label) in Tabs)
+        {
+            <button class="tab @(_tab == id ? "on" : "")" aria-current="@(_tab == id ? "page" : null)" @onclick="() => _tab = id">
+                @label@(id == "sales" && reg.Sales.Count > 0 ? $" ({reg.Sales.Count})" : "")
+            </button>
+        }
+    </nav>
+
+    <main>
+        @if (_tab == "register")
+        {
+            @if (_guide)
+            {
+                <aside class="guide" aria-label="Try this">
+                    <button class="icon" aria-label="Hide this tip" @onclick="() => _guide = false">✕</button>
+                    <b>Try this (30 seconds)</b>
+                    <ol>
+                        <li>Press <b>Online</b> to go offline, then ring up two or three sales.</li>
+                        <li>Open <b>Back office</b>: it has received nothing, but the sales are safe on this register.</li>
+                        <li>Switch on <b>Drop the next reply</b>, then go back online and watch the books still match.</li>
+                    </ol>
+                </aside>
+            }
+
+            @if (reg.CurrentShift is null)
+            {
+                <section class="panel center-note">
+                    <h2>The shift is closed</h2>
+                    <p>Open a new shift from the Shift tab to start selling again.</p>
+                    <button class="btn primary" @onclick='() => _tab = "shift"'>Go to Shift</button>
+                </section>
+            }
+            else
+            {
+                <div class="register">
+                    <section aria-label="Products">
+                        <div class="cats" role="tablist" aria-label="Categories">
+                            @foreach (var c in Categories)
+                            {
+                                <button class="cat @(_category == c ? "on" : "")" @onclick="() => _category = c">@c</button>
+                            }
+                        </div>
+                        <div class="products">
+                            @foreach (var p in reg.Products.Where(p => _category == "All" || p.Category == _category).OrderBy(p => p.Category).ThenBy(p => p.Name))
+                            {
+                                var stock = reg.StockOf(p.Sku);
+                                var inCart = Till.Cart.Lines.FirstOrDefault(l => l.Product.Sku == p.Sku)?.Quantity ?? 0;
+                                <button @key="p.Sku" class="product @(stock - inCart <= 0 ? "out" : "")" disabled="@(stock - inCart <= 0)" @onclick="() => Add(p)">
+                                    <span class="pname">@p.Name</span>
+                                    <span class="pprice">@Money.Format(p.PriceCents)</span>
+                                    <span class="pmeta">
+                                        @(p.Tax == TaxClass.Exempt ? "no tax" : p.Tax == TaxClass.Reduced ? "4% tax" : "8% tax")
+                                        @(stock == int.MaxValue ? "" : stock - inCart <= 0 ? " · sold out" : $" · {stock - inCart} left")
+                                    </span>
+                                    @if (inCart > 0)
+                                    {
+                                        <span class="badge">@inCart</span>
+                                    }
+                                </button>
+                            }
+                        </div>
+                    </section>
+
+                    <aside class="cart panel" aria-label="Current sale">
+                        <div class="cart-head"><h2>Current sale</h2>@if (!Till.Cart.IsEmpty)
+                            {
+                                <button class="link" @onclick="ClearCart">Clear</button>
+                            }
+                        </div>
+
+                        @if (Till.Cart.IsEmpty)
+                        {
+                            <p class="empty">Tap an item to start a sale.</p>
+                        }
+                        else
+                        {
+                            <ul class="lines">
+                                @for (var i = 0; i < Till.Cart.Lines.Count; i++)
+                                {
+                                    var line = Till.Cart.Lines[i];
+                                    var lt = totals.Lines[i];
+                                    <li @key="line.Product.Sku">
+                                        <div class="line-top">
+                                            <b>@line.Product.Name</b>
+                                            <span class="amt">@Money.Format(lt.NetCents)</span>
+                                        </div>
+                                        <div class="line-bot">
+                                            <div class="stepper" role="group" aria-label="@($"Quantity of {line.Product.Name}")">
+                                                <button class="icon" aria-label="One fewer" @onclick="() => Till.Cart.SetQuantity(line.Product.Sku, line.Quantity - 1)">−</button>
+                                                <output>@line.Quantity</output>
+                                                <button class="icon" aria-label="One more" disabled="@(line.Quantity >= reg.StockOf(line.Product.Sku))" @onclick="() => Till.Cart.SetQuantity(line.Product.Sku, line.Quantity + 1)">+</button>
+                                            </div>
+                                            <select aria-label="@($"Discount for {line.Product.Name}")" value="@DiscountCode(line.Discount)" @onchange="e => SetLineDiscount(line.Product.Sku, e.Value?.ToString())">
+                                                <option value="">No discount</option>
+                                                <option value="p10">10% off</option>
+                                                <option value="p25">25% off</option>
+                                                <option value="a100">$1.00 off</option>
+                                            </select>
+                                            @if (lt.LineDiscountCents > 0)
+                                            {
+                                                <span class="saved">−@Money.Format(lt.LineDiscountCents)</span>
+                                            }
+                                        </div>
+                                    </li>
+                                }
+                            </ul>
+
+                            <div class="chips tight" aria-label="Whole-sale discount">
+                                <span class="lab">Whole sale:</span>
+                                <button class="chip @(Till.Cart.CartDiscount is null ? "on" : "")" @onclick="() => Till.Cart.SetCartDiscount(null)">None</button>
+                                <button class="chip @(DiscountCode(Till.Cart.CartDiscount) == "p10" ? "on" : "")" @onclick="() => Till.Cart.SetCartDiscount(Discount.Percent(10))">10%</button>
+                                <button class="chip @(DiscountCode(Till.Cart.CartDiscount) == "p20" ? "on" : "")" @onclick="() => Till.Cart.SetCartDiscount(Discount.Percent(20))">20%</button>
+                                <button class="chip @(DiscountCode(Till.Cart.CartDiscount) == "a500" ? "on" : "")" @onclick="() => Till.Cart.SetCartDiscount(Discount.Amount(500))">$5 off</button>
+                            </div>
+
+                            <dl class="totals">
+                                <div><dt>Subtotal</dt><dd>@Money.Format(totals.GrossCents)</dd></div>
+                                @if (totals.DiscountCents > 0)
+                                {
+                                    <div class="saved"><dt>Discounts</dt><dd>−@Money.Format(totals.DiscountCents)</dd></div>
+                                }
+                                <div><dt>Tax</dt><dd>@Money.Format(totals.TaxCents)</dd></div>
+                                <div class="grand"><dt>Total</dt><dd>@Money.Format(totals.TotalCents)</dd></div>
+                            </dl>
+
+                            <div class="chips tight" aria-label="Tip">
+                                <span class="lab">Tip:</span>
+                                @foreach (var pct in new[] { 0, 10, 15, 20 })
+                                {
+                                    var p = pct;
+                                    <button class="chip @(_tipPct == p ? "on" : "")" @onclick="() => _tipPct = p">@(p == 0 ? "None" : $"{p}%")</button>
+                                }
+                                @if (tip > 0)
+                                {
+                                    <span class="lab">+@Money.Format(tip)</span>
+                                }
+                            </div>
+
+                            <button class="btn primary big wide" @onclick="() => _paying = true">Charge @Money.Format(totals.TotalCents + tip)</button>
+                        }
+                    </aside>
+                </div>
+
+                @if (!Till.Cart.IsEmpty)
+                {
+                    <div class="dock"><span>@Till.Cart.ItemCount @(Till.Cart.ItemCount == 1 ? "item" : "items")</span><button class="btn primary" @onclick="() => _paying = true">Charge @Money.Format(totals.TotalCents + tip)</button></div>
+                }
+            }
+        }
+        else if (_tab == "sales")
+        {
+            <section class="panel">
+                <h2>Sales this session</h2>
+                @if (reg.Sales.Count == 0)
+                {
+                    <p class="empty">No sales yet. Ring one up on the Register tab.</p>
+                }
+                else
+                {
+                    <ul class="sales">
+                        @foreach (var s in reg.Sales.Reverse())
+                        {
+                            <li @key="s.Id">
+                                <div class="who">
+                                    <b>@s.ReceiptNo</b>
+                                    <span>@s.At.ToString("HH:mm") · @string.Join(", ", s.Lines.Select(l => $"{l.Quantity}× {l.Name}"))</span>
+                                </div>
+                                <div class="amt">@Money.Format(s.DueCents)</div>
+                                <span class="tag @s.Status.ToString().ToLowerInvariant()">@(s.Status == SaleStatus.PartiallyRefunded ? "Part refunded" : s.Status.ToString())</span>
+                                <div class="acts">
+                                    <button class="btn small" @onclick="() => _receipt = s">Receipt</button>
+                                    <button class="btn small" disabled="@(s.Status == SaleStatus.Refunded || reg.CurrentShift is null)" @onclick="() => _refund = s">Refund</button>
+                                </div>
+                            </li>
+                        }
+                    </ul>
+                }
+            </section>
+        }
+        else if (_tab == "shift")
+        {
+            <section class="panel">
+                @if (reg.CurrentShift is not null)
+                {
+                    var x = reg.XReport();
+                    <h2>Shift report <span class="sub">(running, not closed yet)</span></h2>
+                    <ReportTable Report="x" />
+                    <h3>Close the shift</h3>
+                    <p class="hint">Count the cash in the drawer. Expected cash is the opening float plus cash sales minus cash refunds. Card payments never touch the drawer.</p>
+                    <div class="form-row">
+                        <label>Counted cash ($)<input inputmode="decimal" @bind="_counted" @bind:event="oninput" placeholder="@Dollars(x.ExpectedCashCents)" /></label>
+                        <button class="btn" @onclick="() => _counted = Dollars(x.ExpectedCashCents)">Use expected</button>
+                        <button class="btn primary" @onclick="CloseShift">Close shift</button>
+                    </div>
+                    @if (_formError is not null)
+                    {
+                        <p class="error" role="alert">@_formError</p>
+                    }
+                }
+                else
+                {
+                    @if (_closed is not null)
+                    {
+                        <h2>Shift closed</h2>
+                        <ReportTable Report="_closed" />
+                        <p class="verdict @(_closed.OverShortCents == 0 ? "ok" : "bad")" role="status">
+                            @(_closed.OverShortCents == 0 ? "The drawer balances to the cent." : _closed.OverShortCents > 0 ? $"The drawer is {Money.Format(_closed.OverShortCents ?? 0)} over." : $"The drawer is {Money.Format(-(_closed.OverShortCents ?? 0))} short.")
+                        </p>
+                    }
+
+                    <h3>Open a new shift</h3>
+                    <div class="form-row">
+                        <label>Cashier<input @bind="_openName" /></label>
+                        <label>Opening float ($)<input inputmode="decimal" @bind="_openFloat" @bind:event="oninput" /></label>
+                        <button class="btn primary" @onclick="OpenShift">Open shift</button>
+                    </div>
+                    @if (_formError is not null)
+                    {
+                        <p class="error" role="alert">@_formError</p>
+                    }
+                }
+            </section>
+        }
+        else
+        {
+            var registerNet = reg.Sales.Sum(s => s.DueCents) - reg.Sales.Sum(s => s.RefundedCents);
+            var expected = registerNet + Till.RestoredNetCents;
+            var books = pending > 0 ? "waiting" : Till.Server.NetRevenueCents == expected ? "match" : "mismatch";
+            <section class="panel">
+                <h2>Back office <span class="sub">(a simulated server that de-duplicates by key)</span></h2>
+                <div class="tiles">
+                    <div class="tile"><b>@Till.Server.SalesCount</b><span>Sales received</span></div>
+                    <div class="tile"><b>@Till.Server.RefundsCount</b><span>Refunds received</span></div>
+                    <div class="tile"><b>@Money.Format(Till.Server.NetRevenueCents)</b><span>Net revenue</span></div>
+                    <div class="tile @(Till.Server.DuplicatesBlocked > 0 ? "hot" : "")"><b>@Till.Server.DuplicatesBlocked</b><span>Duplicates blocked</span></div>
+                </div>
+
+                <p class="verdict @(books == "match" ? "ok" : books == "waiting" ? "wait" : "bad")" role="status">
+                    @(books == "match" ? $"Books match: the register took {Money.Format(expected)} and the back office counted {Money.Format(Till.Server.NetRevenueCents)}."
+                      : books == "waiting" ? $"{pending} waiting on the register. The back office will catch up when they are delivered."
+                      : "The totals disagree.")
+                    @if (Till.RestoredEvents > 0)
+                    {
+                        <span class="sub"> Includes @Till.RestoredEvents from your last visit.</span>
+                    }
+                </p>
+
+                <div class="controls">
+                    <label class="check"><input type="checkbox" checked="@(Till.Server.LoseNextReplies > 0)" @onchange="e => Till.LoseNextReply((bool)(e.Value ?? false))" /> Drop the next reply (the server saves the sale, but the register never hears back)</label>
+                    <button class="btn" @onclick="() => Till.SyncAsync(manual: true)">Sync now</button>
+                </div>
+
+                <h3>Waiting on the register</h3>
+                @if (pending == 0)
+                {
+                    <p class="empty">Nothing waiting.</p>
+                }
+                else
+                {
+                    <ul class="queue">
+                        @foreach (var e in reg.Queue.Pending)
+                        {
+                            <li @key="e.Key"><code>@(e.Key.Length > 14 ? e.Key[..14] + "…" : e.Key)</code><span>@e.Kind</span><b>@Money.Format(e.AmountCents)</b></li>
+                        }
+                    </ul>
+                }
+
+                <h3>Sync log</h3>
+                <ul class="log" aria-label="Sync log" aria-live="polite">
+                    @if (Till.Log.Count == 0)
+                    {
+                        <li class="d">Nothing has happened yet.</li>
+                    }
+                    @foreach (var line in Till.Log)
+                    {
+                        <li>@line</li>
+                    }
+                </ul>
+            </section>
+        }
+    </main>
+
+    @if (_paying)
+    {
+        <PaymentSheet TotalCents="totals.TotalCents" TipCents="tip" OnCancel="() => _paying = false" OnPaid="OnPaid" />
+    }
+
+    @if (_receipt is not null)
+    {
+        <ReceiptSheet Sale="_receipt" OnClose="() => _receipt = null" />
+    }
+
+    @if (_refund is not null)
+    {
+        <RefundSheet Sale="_refund" OnCancel="() => _refund = null" OnDone="() => _refund = null" />
+    }
+
+    @if (Till.Toast is not null)
+    {
+        <div class="toast" role="status">@Till.Toast</div>
+    }
+
+    <footer class="foot">
+        <span>Made by <a href="https://hamzamehmood46.github.io">Hamza Mehmood</a>, a .NET software engineer</span>
+        <span><a href="https://github.com/hamzamehmood46/point-of-sale-dotnet">Source and tests on GitHub</a></span>
+    </footer>
+}
+
+@code {
+    private static readonly (string Id, string Label)[] Tabs =
+    [
+        ("register", "Register"), ("sales", "Sales"), ("shift", "Shift"), ("office", "Back office"),
+    ];
+
+    private static readonly string[] Categories = ["All", "Drinks", "Food", "Shop"];
+
+    private string _tab = "register";
+    private string _category = "All";
+    private int _tipPct;
+    private bool _paying;
+    private bool _guide = true;
+    private Sale? _receipt;
+    private Sale? _refund;
+    private ShiftReport? _closed;
+    private string _counted = "";
+    private string _openName = "Sam";
+    private string _openFloat = "100.00";
+    private string? _formError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Till.Changed += OnChanged;
+        await Till.InitAsync();
+    }
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Till.Changed -= OnChanged;
+
+    private async Task Add(Product p)
+    {
+        var inCart = Till.Cart.Lines.FirstOrDefault(l => l.Product.Sku == p.Sku)?.Quantity ?? 0;
+        var stock = Till.Register.StockOf(p.Sku);
+        if (inCart + 1 > stock)
+        {
+            await Till.ShowToastAsync($"Only {stock} of {p.Name} left.");
+            return;
+        }
+
+        Till.Cart.Add(p);
+    }
+
+    private void ClearCart()
+    {
+        Till.Cart.Clear();
+        _tipPct = 0;
+    }
+
+    private static string Dollars(long cents) => (cents / 100m).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static string DiscountCode(Discount? d) => d switch
+    {
+        PercentDiscount p => "p" + p.Value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture),
+        AmountDiscount a => "a" + a.Cents,
+        _ => "",
+    };
+
+    private void SetLineDiscount(string sku, string? code)
+    {
+        Discount? d = code switch
+        {
+            "p10" => Discount.Percent(10),
+            "p25" => Discount.Percent(25),
+            "a100" => Discount.Amount(100),
+            _ => null,
+        };
+        Till.Cart.SetLineDiscount(sku, d);
+    }
+
+    private void OnPaid(Sale sale)
+    {
+        _paying = false;
+        _tipPct = 0;
+        _receipt = sale;
+    }
+
+    private static bool TryCents(string text, out long cents)
+    {
+        cents = 0;
+        if (!decimal.TryParse(text, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var d) || d < 0 || d > 1_000_000)
+        {
+            return false;
+        }
+
+        cents = Money.Round(d * 100m);
+        return true;
+    }
+
+    private void CloseShift()
+    {
+        if (!TryCents(_counted, out var cents))
+        {
+            _formError = "Enter the counted cash as a dollar amount, for example 112.40.";
+            return;
+        }
+
+        _formError = null;
+        _closed = Till.CloseShift(cents);
+        _counted = "";
+    }
+
+    private void OpenShift()
+    {
+        if (!TryCents(_openFloat, out var cents))
+        {
+            _formError = "Enter the opening float as a dollar amount, for example 100.00.";
+            return;
+        }
+
+        _formError = null;
+        Till.OpenShift(_openName, cents);
+        _closed = null;
+        _tab = "register";
+    }
+}

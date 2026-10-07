@@ -1,0 +1,84 @@
+@inject TillState Till
+
+<div class="scrim" @onclick="Cancel">
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="Refund" @onclick:stopPropagation="true">
+        <div class="sheet-head">
+            <h2>Refund @Sale.ReceiptNo</h2>
+            <button class="icon" aria-label="Close" @onclick="Cancel">✕</button>
+        </div>
+
+        <ul class="refund-lines">
+            @for (var i = 0; i < Sale.Lines.Count; i++)
+            {
+                var index = i;
+                var line = Sale.Lines[i];
+                var left = line.Quantity - Sale.RefundedQuantity(line.Sku);
+                <li @key="line.Sku">
+                    <div><b>@line.Name</b><span>@left of @line.Quantity can be refunded</span></div>
+                    <div class="stepper" role="group" aria-label="@($"Quantity to refund for {line.Name}")">
+                        <button class="icon" aria-label="One fewer" disabled="@(_qty[index] <= 0)" @onclick="() => Step(index, -1, left)">−</button>
+                        <output>@_qty[index]</output>
+                        <button class="icon" aria-label="One more" disabled="@(_qty[index] >= left)" @onclick="() => Step(index, 1, left)">+</button>
+                    </div>
+                </li>
+            }
+        </ul>
+
+        <h3>Pay it back as</h3>
+        <div class="chips">
+            <button class="chip @(_method == TenderKind.Cash ? "on" : "")" @onclick="() => _method = TenderKind.Cash">Cash from the drawer</button>
+            <button class="chip @(_method == TenderKind.Card ? "on" : "")" @onclick="() => _method = TenderKind.Card" disabled="@(Sale.CardChargedCents == 0)">Back to the card</button>
+        </div>
+        <p class="hint">Tips are not refunded. Refunded items go back into stock.</p>
+
+        @if (_error is not null)
+        {
+            <p class="error" role="alert">@_error</p>
+        }
+
+        <div class="sheet-actions">
+            <button class="btn" @onclick="Cancel">Cancel</button>
+            <button class="btn primary big" disabled="@(_qty.All(q => q == 0))" @onclick="Submit">Refund</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    private int[] _qty = [];
+    private TenderKind _method = TenderKind.Cash;
+    private string? _error;
+
+    [Parameter, EditorRequired] public Sale Sale { get; set; } = default!;
+
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    [Parameter] public EventCallback OnDone { get; set; }
+
+    protected override void OnInitialized()
+    {
+        _qty = new int[Sale.Lines.Count];
+        _method = Sale.CardChargedCents > 0 && Sale.CashKeptCents == 0 ? TenderKind.Card : TenderKind.Cash;
+    }
+
+    private void Step(int index, int delta, int max)
+    {
+        _error = null;
+        _qty[index] = Math.Clamp(_qty[index] + delta, 0, max);
+    }
+
+    private async Task Cancel() => await OnCancel.InvokeAsync();
+
+    private async Task Submit()
+    {
+        var items = Sale.Lines.Select((l, i) => (l.Sku, _qty[i])).Where(x => x.Item2 > 0).ToList();
+        var result = await Till.RefundAsync(Sale.Id, items, _method, "Customer refund");
+        if (result.Success)
+        {
+            await Till.ShowToastAsync($"Refunded {Money.Format(result.Refund!.AmountCents)}");
+            await OnDone.InvokeAsync();
+            return;
+        }
+
+        _error = result.Message;
+    }
+}

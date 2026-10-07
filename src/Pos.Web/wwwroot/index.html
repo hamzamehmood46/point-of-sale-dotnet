@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Till: an offline-first point of sale in C#</title>
+    <meta name="description" content="A point-of-sale register that keeps selling when the internet drops, then syncs every sale to the back office exactly once. Built with C# and Blazor WebAssembly." />
+    <meta name="theme-color" content="#0b0f17" />
+    <meta property="og:title" content="Till: an offline-first point of sale" />
+    <meta property="og:description" content="Go offline, ring up sales, reconnect, and watch every sale arrive exactly once." />
+    <meta property="og:type" content="website" />
+    <base href="/" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0f17'/%3E%3Crect x='14' y='14' width='36' height='14' rx='3' fill='%232dd4bf'/%3E%3Crect x='14' y='34' width='10' height='10' rx='2' fill='%23f8fafc'/%3E%3Crect x='27' y='34' width='10' height='10' rx='2' fill='%23f8fafc'/%3E%3Crect x='40' y='34' width='10' height='10' rx='2' fill='%23f8fafc'/%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="css/app.css" />
+</head>
+
+<body>
+    <div id="app">
+        <div class="boot" role="status" aria-live="polite">
+            <div class="boot-mark" aria-hidden="true"><i></i><i></i><i></i></div>
+            <p class="boot-title">Till</p>
+            <p class="boot-sub">Opening the register&hellip;</p>
+        </div>
+    </div>
+
+    <div id="blazor-error-ui">
+        Something went wrong. <a href="" class="reload">Reload</a>
+        <span class="dismiss">&#x2715;</span>
+    </div>
+
+    <script src="js/store.js"></script>
+    <script src="_framework/blazor.webassembly.js"></script>
+</body>
+
+</html>

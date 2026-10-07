@@ -1,0 +1,24 @@
+<table class="report">
+    <tbody>
+        <tr><th scope="row">Sales</th><td>@Report.SalesCount</td></tr>
+        <tr><th scope="row">Subtotal before discounts</th><td>@Money.Format(Report.GrossCents)</td></tr>
+        <tr><th scope="row">Discounts given</th><td>@Money.Format(-Report.DiscountCents)</td></tr>
+        <tr><th scope="row">Net sales</th><td>@Money.Format(Report.NetSalesCents)</td></tr>
+        <tr><th scope="row">Tax collected</th><td>@Money.Format(Report.TaxCents)</td></tr>
+        <tr><th scope="row">Tips</th><td>@Money.Format(Report.TipsCents)</td></tr>
+        <tr><th scope="row">Cash sales (kept in drawer)</th><td>@Money.Format(Report.CashSalesCents)</td></tr>
+        <tr><th scope="row">Card sales</th><td>@Money.Format(Report.CardSalesCents)</td></tr>
+        <tr><th scope="row">Refunds (@Report.RefundsCount)</th><td>@Money.Format(-(Report.CashRefundsCents + Report.CardRefundsCents))</td></tr>
+        <tr><th scope="row">Opening float</th><td>@Money.Format(Report.Shift.OpeningFloatCents)</td></tr>
+        <tr class="em"><th scope="row">Expected cash in drawer</th><td>@Money.Format(Report.ExpectedCashCents)</td></tr>
+        @if (Report.CountedCashCents is not null)
+        {
+            <tr><th scope="row">Counted cash</th><td>@Money.Format(Report.CountedCashCents.Value)</td></tr>
+            <tr class="em"><th scope="row">Over / short</th><td>@Money.Format(Report.OverShortCents ?? 0)</td></tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    [Parameter, EditorRequired] public ShiftReport Report { get; set; } = default!;
+}

@@ -1,0 +1,159 @@
+@inject TillState Till
+
+<div class="scrim" @onclick="Cancel">
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="Take payment" @onclick:stopPropagation="true">
+        <div class="sheet-head">
+            <h2>Take payment</h2>
+            <button class="icon" aria-label="Close" @onclick="Cancel">✕</button>
+        </div>
+
+        <div class="due">
+            <div><span>Total</span><b>@Money.Format(TotalCents)</b></div>
+            @if (TipCents > 0)
+            {
+                <div><span>Tip</span><b>@Money.Format(TipCents)</b></div>
+            }
+            <div class="big"><span>To pay</span><b>@Money.Format(Due)</b></div>
+        </div>
+
+        @if (_tenders.Count > 0)
+        {
+            <ul class="tenders" aria-label="Payments so far">
+                @for (var i = 0; i < _tenders.Count; i++)
+                {
+                    var index = i;
+                    var t = _tenders[i];
+                    <li @key="@($"t{i}")">
+                        <span>@(t.Kind == TenderKind.Cash ? "Cash" : t.CardToken == "tok_decline" ? "Card (will be declined)" : "Card")</span>
+                        <b>@Money.Format(t.AmountCents)</b>
+                        <button class="icon" aria-label="Remove this payment" @onclick="() => Remove(index)">✕</button>
+                    </li>
+                }
+            </ul>
+        }
+
+        <div class="remaining @(Remaining == 0 ? "done" : "")" role="status" aria-live="polite">
+            @if (Remaining > 0)
+            {
+                <span>Still to pay</span><b>@Money.Format(Remaining)</b>
+            }
+            else if (Change > 0)
+            {
+                <span>Change to give</span><b>@Money.Format(Change)</b>
+            }
+            else
+            {
+                <span>Fully paid</span><b>@Money.Format(0)</b>
+            }
+        </div>
+
+        <h3>Cash</h3>
+        <div class="chips">
+            <button class="chip" disabled="@(Remaining == 0)" @onclick="() => AddCash(Remaining)">Exact</button>
+            @foreach (var d in new[] { 500, 1000, 2000, 5000, 10000 })
+            {
+                var amount = d;
+                <button class="chip" @onclick="() => AddCash(amount)">@Money.Format(amount)</button>
+            }
+        </div>
+
+        <h3>Card</h3>
+        <div class="card-row">
+            <label class="check"><input type="checkbox" @bind="_declineCard" /> Use a card that gets declined</label>
+            <div class="chips">
+                <button class="chip" disabled="@(Remaining == 0)" @onclick="() => AddCard(Remaining)">Charge remaining</button>
+                <button class="chip" disabled="@(Remaining < 1000)" @onclick="() => AddCard(1000)">Charge @Money.Format(1000)</button>
+            </div>
+        </div>
+
+        @if (_error is not null)
+        {
+            <p class="error" role="alert">@_error</p>
+        }
+
+        <div class="sheet-actions">
+            <button class="btn" @onclick="Cancel">Back</button>
+            <button class="btn primary big" disabled="@(Remaining > 0 || _busy)" @onclick="Complete">@(_busy ? "Working..." : "Complete sale")</button>
+        </div>
+        <p class="hint">This sale carries one idempotency key, so pressing the button twice (or retrying after a glitch) can never charge twice.</p>
+    </div>
+</div>
+
+@code {
+    private readonly List<Tender> _tenders = [];
+    private readonly string _key = Guid.NewGuid().ToString("N");
+    private bool _declineCard;
+    private bool _busy;
+    private string? _error;
+
+    [Parameter] public long TotalCents { get; set; }
+
+    [Parameter] public long TipCents { get; set; }
+
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    [Parameter] public EventCallback<Sale> OnPaid { get; set; }
+
+    private long Due => TotalCents + TipCents;
+
+    private long Paid => _tenders.Sum(t => t.AmountCents);
+
+    private long Remaining => Math.Max(0, Due - Paid);
+
+    private long Change => Math.Max(0, Paid - Due);
+
+    private void AddCash(long cents)
+    {
+        if (cents <= 0)
+        {
+            return;
+        }
+
+        _error = null;
+        _tenders.Add(Tender.Cash(cents));
+    }
+
+    private void AddCard(long cents)
+    {
+        if (cents <= 0)
+        {
+            return;
+        }
+
+        _error = null;
+        _tenders.Add(Tender.Card(Math.Min(cents, Remaining), _declineCard ? "tok_decline" : "tok_visa"));
+    }
+
+    private void Remove(int index)
+    {
+        _error = null;
+        _tenders.RemoveAt(index);
+    }
+
+    private async Task Cancel() => await OnCancel.InvokeAsync();
+
+    private async Task Complete()
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        var result = await Till.CheckoutAsync(_tenders, TipCents, _key);
+        _busy = false;
+        if (result.Success)
+        {
+            await OnPaid.InvokeAsync(result.Sale!);
+            return;
+        }
+
+        _error = result.Message;
+        if (result.Outcome == CheckoutOutcome.CardDeclined)
+        {
+            _tenders.RemoveAll(t => t.Kind == TenderKind.Card);
+            _declineCard = false;
+        }
+    }
+}

@@ -1,0 +1,22 @@
+<div class="scrim" @onclick="OnClose">
+    <div class="sheet narrow" role="dialog" aria-modal="true" aria-label="Receipt" @onclick:stopPropagation="true">
+        @if (Sale.ChangeCents > 0)
+        {
+            <div class="change" role="status"><span>Change due</span><b>@Money.Format(Sale.ChangeCents)</b></div>
+        }
+        else
+        {
+            <div class="change ok" role="status"><span>Paid in full</span><b>@Money.Format(Sale.DueCents)</b></div>
+        }
+        <pre class="paper" aria-label="Receipt text">@string.Join("\n", Receipt.Render(Sale))</pre>
+        <div class="sheet-actions">
+            <button class="btn primary big" @onclick="OnClose">New sale</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public Sale Sale { get; set; } = default!;
+
+    [Parameter] public EventCallback OnClose { get; set; }
+}
